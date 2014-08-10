@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -275,10 +276,11 @@ func (s *Session) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 	ticket = tickets[n]
 
 	// get booking vfcode
+	key := int(rand.Float32() * 10000)
 	u := fmt.Sprintf(
-		"http://guahao.zjol.com.cn/ashx/getyzm.aspx?k=%s&t=yy&hyid=%s",
-		"572", ticket.id)
-	glog.V(2).Infof("ticketing url -> '%s'\n", u)
+		"http://guahao.zjol.com.cn/ashx/getyzm.aspx?k=%v&t=yy&hyid=%v",
+		key, ticket.id)
+	glog.V(2).Infof("ticketing url -> '%v'\n", u)
 	resp, err := s.client.Get(u)
 	if err != nil {
 		return
