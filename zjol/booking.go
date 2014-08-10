@@ -117,10 +117,10 @@ func RealLogin(user, pass string) (*Session, error) {
 
 	// login
 	loginUrl := fmt.Sprintf(
-		"http://guahao.zjol.com.cn/ashx/LoginDefault.ashx?idcode=%s&pwd=%s&txtVerifyCode=%s",
+		"http://guahao.zjol.com.cn/ashx/LoginDefault.ashx?idcode=%v&pwd=%v&txtVerifyCode=%v",
 		user, pass, vfcode)
 	glog.Infof("logging in...\n")
-	glog.V(2).Infof("GET: '%s'\n", loginUrl)
+	glog.V(2).Infof("GET: '%v'\n", loginUrl)
 	resp, err := client.Get(loginUrl)
 	if err != nil {
 		return nil, err
@@ -130,7 +130,7 @@ func RealLogin(user, pass string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	glog.V(3).Infof("response -> '%s'\n", b)
+	glog.V(3).Infof("response -> '%v'\n", b)
 	loginResp := strings.Split(string(b), "|")
 	if len(loginResp) <= 1 {
 		return nil, errors.New(loginResp[0])
@@ -168,7 +168,7 @@ func (s *Session) Book(n int) (err error) {
 }
 
 func (s *Session) loop1(link string, n int) (err error) {
-	glog.V(2).Infof("GET: '%s'\n", link)
+	glog.V(2).Infof("GET: '%v'\n", link)
 	resp, err := s.client.Get(link)
 	if err != nil {
 		return
@@ -189,17 +189,17 @@ func (s *Session) loop1(link string, n int) (err error) {
 	// select n's link
 	if n > len(sigMatches) {
 		return errors.New(
-			fmt.Sprintf("link number[%s] > maximum[%s] availible link choices",
+			fmt.Sprintf("link number[%d] > maximum[%d] availible link choices",
 				n, len(sigMatches)))
 	} else if n == 0 {
 		return errors.New(
-			fmt.Sprintf("link number[%s] should start from '1'", n))
+			fmt.Sprintf("link number[%v] should start from '1'", n))
 	}
 	sig := sigMatches[n-1][1]
 
 	// list 号源
 	fd := url.Values{"sg": {sig}}.Encode()
-	glog.V(2).Infof("POST data -> '%s'\n", fd)
+	glog.V(2).Infof("POST data -> '%v'\n", fd)
 	req, err := http.NewRequest("POST", "http://guahao.zjol.com.cn/ashx/gethy.ashx",
 		strings.NewReader(fd))
 	req.Header.Add("Referer", link)
@@ -213,7 +213,7 @@ func (s *Session) loop1(link string, n int) (err error) {
 	if err != nil {
 		return err
 	}
-	glog.V(3).Infof("showdiv('%s') -> %s\n", sig, b)
+	glog.V(3).Infof("showdiv('%v') -> %v\n", sig, b)
 
 	// numbering plan
 	lists := strings.Split(string(b), "#")
@@ -223,10 +223,10 @@ func (s *Session) loop1(link string, n int) (err error) {
 	patient := lists[6]
 	numbering := lists[11]
 	sig2 := lists[12]
-	glog.V(2).Infof("%s %s %s %s %s %s\n", hospital, dept, doctor, patient, numbering, sig2)
+	glog.V(2).Infof("%v %v %v %v %v %v\n", hospital, dept, doctor, patient, numbering, sig2)
 	nums := strings.Split(numbering, "$")
 	nums = nums[1:]
-	fmt.Printf("[%s] %s %s %s:\n", patient, hospital, dept, doctor)
+	fmt.Printf("[%v] %v %v %v:\n", patient, hospital, dept, doctor)
 	tickets := make([]*Ticket, len(nums))
 	for i, num := range nums {
 		fields := strings.Split(num, "|")
@@ -237,7 +237,7 @@ func (s *Session) loop1(link string, n int) (err error) {
 			dayPart: fields[3],
 			referer: link}
 		tickets[i] = t
-		fmt.Fprintf(stderr, "\tNo:%s Time:%s DayPart:%s Code:%s\n",
+		fmt.Fprintf(stderr, "\tNo:%v Time:%v DayPart:%v Code:%v\n",
 			fields[1], fields[2], fields[3], fields[0])
 		stderr.Flush()
 	}
@@ -297,7 +297,7 @@ func (s *Session) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 	} else {
 		return
 	}
-	glog.V(2).Infof("ticketing vfcode input: '%s'\n", vfcode)
+	glog.V(2).Infof("ticketing vfcode input: '%v'\n", vfcode)
 
 	// book a ticket
 	fd := url.Values{
@@ -306,7 +306,7 @@ func (s *Session) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 		"xh":     {ticket.no},
 		"qhsj":   {ticket.time},
 		"sg":     {sig2}}.Encode()
-	glog.V(2).Infof("ticketing POST data -> '%s'\n", fd)
+	glog.V(2).Infof("ticketing POST data -> '%v'\n", fd)
 	req, err := http.NewRequest("POST", "http://guahao.zjol.com.cn/ashx/TreadYuyue.ashx",
 		strings.NewReader(fd))
 	req.Header.Add("Referer", ticket.referer)
@@ -321,13 +321,13 @@ func (s *Session) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 		return
 	}
 	bs := string(b)
-	glog.V(3).Infof("ticketing response -> '%s'\n", bs)
+	glog.V(3).Infof("ticketing response -> '%v'\n", bs)
 	if strings.HasPrefix(bs, "ERROR") {
 		tickets = append(tickets[:n], tickets[n+1:]...)
 		err = errors.New(bs)
 		return
 	}
-	glog.Infof("success -> '%s'\n", bs)
+	glog.Infof("success -> '%v'\n", bs)
 
 	return true, nil
 }
@@ -338,9 +338,9 @@ func (s *Session) getDivUrl() (string, error) {
 		return "", errors.New("no valid department info")
 	}
 	if s.Doctor == "" {
-		return fmt.Sprintf("http://guahao.zjol.com.cn/DepartMent.Aspx?ID=%s", s.Dept), nil
+		return fmt.Sprintf("http://guahao.zjol.com.cn/DepartMent.Aspx?ID=%v", s.Dept), nil
 	} else {
-		return fmt.Sprintf("http://guahao.zjol.com.cn/DoctorInfo.Aspx?DEPART=%s&ID=%s",
+		return fmt.Sprintf("http://guahao.zjol.com.cn/DoctorInfo.Aspx?DEPART=%v&ID=%v",
 			s.Dept, s.Doctor), nil
 	}
 }
@@ -359,7 +359,7 @@ func (s *Session) getVfcode(url string, outputPath string) (vfcode string, err e
 	vfcode, err = stdin.ReadString('\n')
 	if err == nil || err == io.EOF {
 		vfcode = vfcode[:len(vfcode)-1]
-		glog.V(2).Infof("vfcode input -> '%s'\n", vfcode)
+		glog.V(2).Infof("vfcode input -> '%v'\n", vfcode)
 	}
 	return
 }
@@ -367,7 +367,7 @@ func (s *Session) getVfcode(url string, outputPath string) (vfcode string, err e
 func debugHeaders(header http.Header) {
 	glog.V(3).Infof("======== cookies =========\n")
 	for k, v := range header {
-		glog.V(3).Infof("%s -> %s\n", k, v)
+		glog.V(3).Infof("%v -> %v\n", k, v)
 	}
 	glog.V(3).Infof("======== cookies =========\n\n")
 }
@@ -375,7 +375,7 @@ func debugHeaders(header http.Header) {
 func debugCookies(cookies ...*http.Cookie) {
 	glog.V(3).Infof("======== cookies =========\n")
 	for _, cookie := range cookies {
-		glog.V(3).Infof("%s -> %s\n", cookie.Name, cookie.Value)
+		glog.V(3).Infof("%v -> %v\n", cookie.Name, cookie.Value)
 	}
 	glog.V(3).Infof("======== cookies =========\n\n")
 }
