@@ -293,6 +293,10 @@ func (s *Session) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 	stderr.Flush()
 	vfcode, err := stdin.ReadString('\n')
 	if err == nil || err == io.EOF {
+		// re-get vgcode if a empty line was read in
+		if len(vfcode) == 1 {
+			return false, errors.New("re-download vfcode...")
+		}
 		vfcode = vfcode[:len(vfcode)-1]
 	} else {
 		return
