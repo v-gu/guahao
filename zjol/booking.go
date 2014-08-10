@@ -363,17 +363,17 @@ func (s *Session) getVfcode(url string, outputPath string) (vfcode string, err e
 }
 
 func debugHeaders(header http.Header) {
-	glog.V(2).Infof("======== cookies =========\n")
+	glog.V(3).Infof("======== cookies =========\n")
 	for k, v := range header {
-		glog.V(2).Infof("%s -> %s\n", k, v)
+		glog.V(3).Infof("%s -> %s\n", k, v)
 	}
-	glog.V(2).Infof("======== cookies =========\n\n")
+	glog.V(3).Infof("======== cookies =========\n\n")
 }
 
 func debugCookies(cookies ...*http.Cookie) {
-	glog.V(2).Infof("======== cookies =========\n")
+	glog.V(3).Infof("======== cookies =========\n")
 	for _, cookie := range cookies {
-		glog.V(2).Infof("%s -> %s\n", cookie.Name, cookie.Value)
+		glog.V(3).Infof("%s -> %s\n", cookie.Name, cookie.Value)
 	}
-	glog.V(2).Infof("======== cookies =========\n\n")
+	glog.V(3).Infof("======== cookies =========\n\n")
 }

@@ -6,7 +6,7 @@ import (
 
 	glog "github.com/golang/glog"
 
-	zjol "v-io.co/guahao/zjol"
+	zjol "github.com/v-gu/guahao/zjol"
 )
 
 var (
