@@ -16,10 +16,16 @@ import (
 	"time"
 
 	glog "github.com/golang/glog"
+
+	config "github.com/v-gu/guahao/config"
+	provider "github.com/v-gu/guahao/provider"
+	driver "github.com/v-gu/guahao/provider/driver"
+	store "github.com/v-gu/guahao/store"
 )
 
 const (
-	domainUrl = "http://guahao.zjol.com.cn/"
+	NAME       = "zjol"
+	DOMAIN_URL = "http://guahao.zjol.com.cn/"
 )
 
 var (
@@ -31,17 +37,24 @@ var (
 )
 
 // A Session tracks a unique login session.
-type Session struct {
-	SessionId string
-	UserId    string
+type Site struct {
+	User string
+	Pass string
 
 	Dept   string // department ID
 	Doctor string // doctor ID
+	LinkNo int    // booking link index
 
 	hospital string
 	patient  string
 
-	client *http.Client
+	session Session
+	client  *http.Client
+}
+
+type Session struct {
+	SessionId string
+	UserId    string
 }
 
 type Ticket struct {
@@ -55,100 +68,124 @@ type Ticket struct {
 
 func init() {
 	var err error
-	domain, err = url.Parse(domainUrl)
+	domain, err = url.Parse(DOMAIN_URL)
 	if err != nil {
-		glog.Fatalln(err)
+		panic(err)
 	}
+
+	provider.Register(NAME, New())
+}
+
+// client should call this function before any other functions or
+// methods
+func New() driver.Driver {
+	// compose client and session
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		panic(err)
+	}
+	client := &http.Client{Jar: jar}
+	site := &Site{client: client}
+	return site
 }
 
 // Login into account from local stored session information.
-func Login(sessionId, userId string) (*Session, error) {
-	if sessionId == "" {
-		return nil, errors.New("session_id is null")
-	} else if userId == "" {
-		return nil, errors.New("user_id is null")
+func (s *Site) Login() (err error) {
+	// print patient info
+	glog.Infof("User: %v, Dept: %v, Doctor: %v, LinkNo: %v\n",
+		s.User, s.Dept, s.Doctor, s.LinkNo)
+
+	// read in session cache
+	err = store.Store.Unmarshal(&s.session, NAME, "session.cache")
+	if glog.V(config.LOG_CONFIG) && err != nil {
+		glog.Infof("zjol: problem reading session information: %s\n", err)
+	}
+	if len(s.session.SessionId) == 0 || len(s.session.UserId) == 0 {
+		return s.login()
 	}
 
 	// compose client and session
 	jar, err := cookiejar.New(nil)
 	if err != nil {
-		return nil, err
+		return
 	}
 	client := &http.Client{Jar: jar}
 	sidCookie := &http.Cookie{
 		Domain: domain.Host, Path: "/",
-		Name: "ASP.NET_SessionId", Value: sessionId,
+		Name: "ASP.NET_SessionId", Value: s.session.SessionId,
 		HttpOnly: true, MaxAge: 0}
 	uidCookie := &http.Cookie{
 		Domain: domain.Host, Path: "/",
-		Name: "UserId", Value: userId,
+		Name: "UserId", Value: s.session.UserId,
 		HttpOnly: true, MaxAge: 0}
 	client.Jar.SetCookies(domain, []*http.Cookie{sidCookie, uidCookie})
+	s.client = client
 
-	session := &Session{
-		SessionId: sessionId,
-		UserId:    userId,
-		client:    client}
-
-	return session, nil
+	if glog.V(config.LOG_SESSION) {
+		glog.Infof("zjol: session: %#v\n", &s.session)
+	}
+	return
 }
 
-// Account login function, call this if no session informations could be restored.
-func RealLogin(user, pass string) (*Session, error) {
-	// compose client and session
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		return nil, err
-	}
-	client := &http.Client{Jar: jar}
-	session := &Session{client: client}
-
+// Account login function, a real connecting login
+func (s *Site) login() (err error) {
 	// get login VfCode
-	vfcode, err := session.getVfcode("http://guahao.zjol.com.cn/VerifyCodeCH.aspx",
+	vfcode, err := s.getVfcode("http://guahao.zjol.com.cn/VerifyCodeCH.aspx",
 		"storage/zjol/logincode.jpg")
 	if err != nil {
-		return nil, err
+		return err
 	}
-	for _, cookie := range session.client.Jar.Cookies(domain) {
+	for _, cookie := range s.client.Jar.Cookies(domain) {
 		if cookie.Name == "ASP.NET_SessionId" {
-			session.SessionId = cookie.Value
+			s.session.SessionId = cookie.Value
 		}
 	}
 
 	// login
 	loginUrl := fmt.Sprintf(
 		"http://guahao.zjol.com.cn/ashx/LoginDefault.ashx?idcode=%v&pwd=%v&txtVerifyCode=%v",
-		user, pass, vfcode)
+		s.User, s.Pass, vfcode)
 	glog.Infof("logging in...\n")
 	glog.V(2).Infof("GET: '%v'\n", loginUrl)
-	resp, err := client.Get(loginUrl)
+	resp, err := s.client.Get(loginUrl)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	b, err := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	glog.V(3).Infof("response -> '%v'\n", b)
+	glog.V(3).Infof("response -> '%s'\n", b)
 	loginResp := strings.Split(string(b), "|")
 	if len(loginResp) <= 1 {
-		return nil, errors.New(loginResp[0])
+		return errors.New(loginResp[0])
 	}
-	session.UserId = loginResp[1]
+	s.session.UserId = loginResp[1]
+
+	// store session information to cache
+	err = store.Store.Marshal(&s.session, NAME, "session.cache")
+	if err != nil {
+		glog.Warningf("zjol: problem writing session information to cache file: %s\n", err)
+	}
+
+	// compose cookies
 	uidCookie := &http.Cookie{
 		Domain: "guahao.zjol.com.cn", Path: "/",
-		Name: "UserId", Value: session.UserId,
+		Name: "UserId", Value: s.session.UserId,
 		HttpOnly: true, MaxAge: 0}
-	client.Jar.SetCookies(domain, []*http.Cookie{uidCookie})
+	s.client.Jar.SetCookies(domain, []*http.Cookie{uidCookie})
 
-	return session, nil
+	if glog.V(config.LOG_SESSION) {
+		glog.Infof("zjol: session: %#v\n", &s.session)
+	}
+	return
 }
 
 // book a ticket with n's booking link in the page. 'n' counts from 1.
-func (s *Session) Book(n int) (err error) {
+func (s *Site) Book() (err error) {
 	// 科室
-	glog.Infoln("entering department...")
+	glog.Infoln("zjol: entering department...")
 	link, err := s.getDivUrl()
 	if err != nil {
 		return err
@@ -156,7 +193,10 @@ func (s *Session) Book(n int) (err error) {
 
 	// booking loop
 	for {
-		err = s.loop1(link, n)
+		end, err := s.loop1(link, s.LinkNo)
+		if end {
+			return err
+		}
 		if err != nil {
 			glog.Errorln(err)
 		}
@@ -164,10 +204,9 @@ func (s *Session) Book(n int) (err error) {
 		stderr.Flush()
 		stdin.ReadString('\n')
 	}
-	return
 }
 
-func (s *Session) loop1(link string, n int) (err error) {
+func (s *Site) loop1(link string, n int) (end bool, err error) {
 	glog.V(2).Infof("GET: '%v'\n", link)
 	resp, err := s.client.Get(link)
 	if err != nil {
@@ -183,16 +222,16 @@ func (s *Session) loop1(link string, n int) (err error) {
 	sigMatches := re.FindAllStringSubmatch(sb, -1)
 	if sigMatches == nil {
 		// can't find match, retry
-		return errors.New("can't find matching booking link")
+		return false, errors.New("can't find matching booking link")
 	}
 
 	// select n's link
 	if n > len(sigMatches) {
-		return errors.New(
+		return false, errors.New(
 			fmt.Sprintf("link number[%d] > maximum[%d] availible link choices",
 				n, len(sigMatches)))
 	} else if n == 0 {
-		return errors.New(
+		return false, errors.New(
 			fmt.Sprintf("link number[%v] should start from '1'", n))
 	}
 	sig := sigMatches[n-1][1]
@@ -204,14 +243,15 @@ func (s *Session) loop1(link string, n int) (err error) {
 		strings.NewReader(fd))
 	req.Header.Add("Referer", link)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	glog.V(2).Infof("header -> %V\n", req.Header)
 	resp, err = s.client.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	b, err = ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		return err
+		return false, err
 	}
 	glog.V(3).Infof("showdiv('%v') -> %v\n", sig, b)
 
@@ -243,21 +283,18 @@ func (s *Session) loop1(link string, n int) (err error) {
 	}
 
 	// call booking loop
-	err = nil
-	end := false
 	for {
-		end, err = s.loop2(sig2, tickets)
+		end, err := s.loop2(sig2, tickets)
 		if end {
-			break
+			return end, err
 		}
 		if err != nil {
 			glog.Errorln(err)
 		}
 	}
-	return
 }
 
-func (s *Session) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
+func (s *Site) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 	var ticket *Ticket
 	var n int
 	if len(tickets) > 5 {
@@ -337,7 +374,7 @@ func (s *Session) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 }
 
 // return a URL string provided booking address
-func (s *Session) getDivUrl() (string, error) {
+func (s *Site) getDivUrl() (url string, err error) {
 	if s.Dept == "" {
 		return "", errors.New("no valid department info")
 	}
@@ -349,7 +386,7 @@ func (s *Session) getDivUrl() (string, error) {
 	}
 }
 
-func (s *Session) getVfcode(url string, outputPath string) (vfcode string, err error) {
+func (s *Site) getVfcode(url string, outputPath string) (vfcode string, err error) {
 	resp, err := s.client.Get(url)
 	if err != nil {
 		return
@@ -366,20 +403,4 @@ func (s *Session) getVfcode(url string, outputPath string) (vfcode string, err e
 		glog.V(2).Infof("vfcode input -> '%v'\n", vfcode)
 	}
 	return
-}
-
-func debugHeaders(header http.Header) {
-	glog.V(3).Infof("======== cookies =========\n")
-	for k, v := range header {
-		glog.V(3).Infof("%v -> %v\n", k, v)
-	}
-	glog.V(3).Infof("======== cookies =========\n\n")
-}
-
-func debugCookies(cookies ...*http.Cookie) {
-	glog.V(3).Infof("======== cookies =========\n")
-	for _, cookie := range cookies {
-		glog.V(3).Infof("%v -> %v\n", cookie.Name, cookie.Value)
-	}
-	glog.V(3).Infof("======== cookies =========\n\n")
 }
