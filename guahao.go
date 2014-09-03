@@ -10,18 +10,18 @@ import (
 func main() {
 	var err error
 
-	// book zjol
+	// // catch panic, continue then
+	// defer func() {
+	// 	if err := recover(); err != nil {
+	// 		glog.Warningf("$v, retrying... ", err)
+	// 	}
+	// }()
+
 	for {
-		err := provider.Login()
+		err = provider.Book()
 		if err != nil {
-			glog.Errorln(err)
-		} else {
-			break
+			glog.Fatalln(err)
 		}
-	}
-	err = provider.Book()
-	if err != nil {
-		glog.Fatalln(err)
 	}
 	glog.Infof("done\n")
 }

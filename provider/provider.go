@@ -14,7 +14,7 @@ var drivers = make(map[string]driver.Driver)
 // it panics.
 func Register(name string, driver driver.Driver) {
 	if driver == nil {
-		panic("provider: Register driver is null")
+		panic("Register driver is null")
 	}
 	for _, n := range config.All.Disabled {
 		if n == name {
@@ -23,7 +23,7 @@ func Register(name string, driver driver.Driver) {
 		}
 	}
 	if _, dup := drivers[name]; dup {
-		panic(fmt.Sprintf("provider: Register called twice for driver [%v]", name))
+		panic(fmt.Sprintf("Register called twice for driver [%v]", name))
 	}
 	drivers[name] = driver
 
@@ -32,15 +32,6 @@ func Register(name string, driver driver.Driver) {
 	if err != nil {
 		panic(fmt.Sprintf("can't unmarshal config for driver: [%v]: %s", name, err))
 	}
-}
-
-//
-func Login() error {
-	err := drivers["zjol"].Login()
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func Book() error {

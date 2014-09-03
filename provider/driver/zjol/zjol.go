@@ -15,9 +15,7 @@ import (
 	"strings"
 	"time"
 
-	glog "github.com/golang/glog"
-
-	config "github.com/v-gu/guahao/config"
+	log "github.com/v-gu/guahao/log"
 	provider "github.com/v-gu/guahao/provider"
 	driver "github.com/v-gu/guahao/provider/driver"
 	store "github.com/v-gu/guahao/store"
@@ -26,6 +24,8 @@ import (
 const (
 	NAME       = "zjol"
 	DOMAIN_URL = "http://guahao.zjol.com.cn/"
+
+	session_file = "session.cache"
 )
 
 var (
@@ -50,6 +50,7 @@ type Site struct {
 
 	session Session
 	client  *http.Client
+	log.NamedLogger
 }
 
 type Session struct {
@@ -73,35 +74,34 @@ func init() {
 		panic(err)
 	}
 
-	provider.Register(NAME, New())
+	provider.Register(NAME, NewDriver())
 }
 
 // client should call this function before any other functions or
 // methods
-func New() driver.Driver {
+func NewDriver() driver.Driver {
 	// compose client and session
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		panic(err)
 	}
 	client := &http.Client{Jar: jar}
-	site := &Site{client: client}
+	site := &Site{client: client, NamedLogger: log.NamedLogger{NAME}}
 	return site
 }
 
 // Login into account from local stored session information.
-func (s *Site) Login() (err error) {
+func (s *Site) login() (err error) {
 	// print patient info
-	glog.Infof("User: %v, Dept: %v, Doctor: %v, LinkNo: %v\n",
+	s.Infof("User: %v, Dept: %v, Doctor: %v, LinkNo: %v\n",
 		s.User, s.Dept, s.Doctor, s.LinkNo)
 
-	// read in session cache
-	err = store.Store.Unmarshal(&s.session, NAME, "session.cache")
-	if glog.V(config.LOG_CONFIG) && err != nil {
-		glog.Infof("zjol: problem reading session information: %s\n", err)
-	}
-	if len(s.session.SessionId) == 0 || len(s.session.UserId) == 0 {
-		return s.login()
+	// read local cache
+	err = s.readLocalCache()
+	if err != nil ||
+		(len(s.session.SessionId) == 0 || len(s.session.UserId) == 0) {
+		// local cache contains invaild session info
+		return s.realLogin()
 	}
 
 	// compose client and session
@@ -121,14 +121,18 @@ func (s *Site) Login() (err error) {
 	client.Jar.SetCookies(domain, []*http.Cookie{sidCookie, uidCookie})
 	s.client = client
 
-	if glog.V(config.LOG_SESSION) {
-		glog.Infof("zjol: session: %#v\n", &s.session)
-	}
+	s.Debugf(log.DEBUG_SESSION, "%s: session: %#v\n", NAME, &s.session)
+	return
+}
+
+func (s *Site) readLocalCache() (err error) {
+	err = store.Store.Unmarshal(&s.session, NAME, session_file)
+	s.Debugf(log.DEBUG_CONFIG, "problem reading session information: %s\n", err)
 	return
 }
 
 // Account login function, a real connecting login
-func (s *Site) login() (err error) {
+func (s *Site) realLogin() (err error) {
 	// get login VfCode
 	vfcode, err := s.getVfcode("http://guahao.zjol.com.cn/VerifyCodeCH.aspx",
 		"storage/zjol/logincode.jpg")
@@ -145,8 +149,8 @@ func (s *Site) login() (err error) {
 	loginUrl := fmt.Sprintf(
 		"http://guahao.zjol.com.cn/ashx/LoginDefault.ashx?idcode=%v&pwd=%v&txtVerifyCode=%v",
 		s.User, s.Pass, vfcode)
-	glog.Infof("logging in...\n")
-	glog.V(2).Infof("GET: '%v'\n", loginUrl)
+	s.Infoln("logging in...")
+	s.Debugf(log.DEBUG_HTTP, "GET -> '%v'\n", loginUrl)
 	resp, err := s.client.Get(loginUrl)
 	if err != nil {
 		return err
@@ -156,7 +160,7 @@ func (s *Site) login() (err error) {
 	if err != nil {
 		return err
 	}
-	glog.V(3).Infof("response -> '%s'\n", b)
+	s.Debugf(log.DEBUG_HTTP, "responce -> '%s'\n", b)
 	loginResp := strings.Split(string(b), "|")
 	if len(loginResp) <= 1 {
 		return errors.New(loginResp[0])
@@ -164,9 +168,9 @@ func (s *Site) login() (err error) {
 	s.session.UserId = loginResp[1]
 
 	// store session information to cache
-	err = store.Store.Marshal(&s.session, NAME, "session.cache")
+	err = store.Store.Marshal(&s.session, NAME, session_file)
 	if err != nil {
-		glog.Warningf("zjol: problem writing session information to cache file: %s\n", err)
+		s.Warningf("problem writing session information to cache file: %s\n", err)
 	}
 
 	// compose cookies
@@ -176,16 +180,15 @@ func (s *Site) login() (err error) {
 		HttpOnly: true, MaxAge: 0}
 	s.client.Jar.SetCookies(domain, []*http.Cookie{uidCookie})
 
-	if glog.V(config.LOG_SESSION) {
-		glog.Infof("zjol: session: %#v\n", &s.session)
-	}
+	s.Debugf(log.DEBUG_SESSION, "session: %#v\n", &s.session)
 	return
 }
 
-// book a ticket with n's booking link in the page. 'n' counts from 1.
-func (s *Site) Book() (err error) {
+// book a ticket with n's booking link in the page. 'n' starts from
+// '1'. May panic if session is expired.
+func (s *Site) Book() error {
 	// 科室
-	glog.Infoln("zjol: entering department...")
+	s.Infof("entering department...")
 	link, err := s.getDivUrl()
 	if err != nil {
 		return err
@@ -193,21 +196,20 @@ func (s *Site) Book() (err error) {
 
 	// booking loop
 	for {
-		end, err := s.loop1(link, s.LinkNo)
-		if end {
+		if end, err := s.loop1(link, s.LinkNo); end {
 			return err
 		}
 		if err != nil {
-			glog.Errorln(err)
+			s.Errorln(err)
 		}
-		stderr.WriteString("booking link not availiable, press ENTER to retry:")
+		stderr.WriteString("failed to accquire booking link, press ENTER to retry:")
 		stderr.Flush()
 		stdin.ReadString('\n')
 	}
 }
 
 func (s *Site) loop1(link string, n int) (end bool, err error) {
-	glog.V(2).Infof("GET: '%v'\n", link)
+	s.Debugf(log.DEBUG_HTTP, "GET: '%v'\n", link)
 	resp, err := s.client.Get(link)
 	if err != nil {
 		return
@@ -215,6 +217,15 @@ func (s *Site) loop1(link string, n int) (end bool, err error) {
 	b, err := ioutil.ReadAll(resp.Body)
 	resp.Body.Close()
 	sb := string(b)
+
+	// check response body to see if session was expired
+	if sb == "-2" {
+		s.Warning("session expired")
+		for {
+			if err = s.login(); err != nil {
+			}
+		}
+	}
 
 	// grub all bookable links
 	re := regexp.MustCompile(`showDiv\('(.*)'\)`)
@@ -238,12 +249,12 @@ func (s *Site) loop1(link string, n int) (end bool, err error) {
 
 	// list 号源
 	fd := url.Values{"sg": {sig}}.Encode()
-	glog.V(2).Infof("POST data -> '%v'\n", fd)
+	s.Debugf(log.DEBUG_HTTP, "POST data -> '%v'\n", fd)
 	req, err := http.NewRequest("POST", "http://guahao.zjol.com.cn/ashx/gethy.ashx",
 		strings.NewReader(fd))
 	req.Header.Add("Referer", link)
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	glog.V(2).Infof("header -> %V\n", req.Header)
+	s.Debugf(log.DEBUG_HTTP, "header -> %V\n", req.Header)
 	resp, err = s.client.Do(req)
 	if err != nil {
 		return false, err
@@ -253,7 +264,7 @@ func (s *Site) loop1(link string, n int) (end bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	glog.V(3).Infof("showdiv('%v') -> %v\n", sig, b)
+	s.Debugf(log.DEBUG_SESSION, "showdiv('%v') -> %s\n", sig, b)
 
 	// numbering plan
 	lists := strings.Split(string(b), "#")
@@ -263,7 +274,8 @@ func (s *Site) loop1(link string, n int) (end bool, err error) {
 	patient := lists[6]
 	numbering := lists[11]
 	sig2 := lists[12]
-	glog.V(2).Infof("%v %v %v %v %v %v\n", hospital, dept, doctor, patient, numbering, sig2)
+	s.Debugf(log.DEBUG_SESSION, "%v %v %v %v %v %v\n",
+		hospital, dept, doctor, patient, numbering, sig2)
 	nums := strings.Split(numbering, "$")
 	nums = nums[1:]
 	fmt.Printf("[%v] %v %v %v:\n", patient, hospital, dept, doctor)
@@ -289,7 +301,7 @@ func (s *Site) loop1(link string, n int) (end bool, err error) {
 			return end, err
 		}
 		if err != nil {
-			glog.Errorln(err)
+			s.Errorln(err)
 		}
 	}
 }
@@ -317,7 +329,7 @@ func (s *Site) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 	u := fmt.Sprintf(
 		"http://guahao.zjol.com.cn/ashx/getyzm.aspx?k=%v&t=yy&hyid=%v",
 		key, ticket.id)
-	glog.V(2).Infof("ticketing url -> '%v'\n", u)
+	s.Debugf(log.DEBUG_SESSION, "ticketing url -> '%v'\n", u)
 	resp, err := s.client.Get(u)
 	if err != nil {
 		return
@@ -338,7 +350,7 @@ func (s *Site) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 	} else {
 		return
 	}
-	glog.V(2).Infof("ticketing vfcode input: '%v'\n", vfcode)
+	s.Debugf(log.DEBUG_SESSION, "ticketing vfcode input: '%v'\n", vfcode)
 
 	// book a ticket
 	fd := url.Values{
@@ -347,7 +359,7 @@ func (s *Site) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 		"xh":     {ticket.no},
 		"qhsj":   {ticket.time},
 		"sg":     {sig2}}.Encode()
-	glog.V(2).Infof("ticketing POST data -> '%v'\n", fd)
+	s.Debugf(log.DEBUG_SESSION, "ticketing POST data -> '%v'\n", fd)
 	req, err := http.NewRequest("POST", "http://guahao.zjol.com.cn/ashx/TreadYuyue.ashx",
 		strings.NewReader(fd))
 	req.Header.Add("Referer", ticket.referer)
@@ -362,13 +374,13 @@ func (s *Site) loop2(sig2 string, tickets []*Ticket) (end bool, err error) {
 		return
 	}
 	bs := string(b)
-	glog.V(3).Infof("ticketing response -> '%v'\n", bs)
+	s.Debugf(log.DEBUG_SESSION, "ticketing response -> '%v'\n", bs)
 	if strings.HasPrefix(bs, "ERROR") {
 		tickets = append(tickets[:n], tickets[n+1:]...)
 		err = errors.New(bs)
 		return
 	}
-	glog.Infof("success -> '%v'\n", bs)
+	s.Infof("success -> '%v'\n", bs)
 
 	return true, nil
 }
@@ -400,7 +412,7 @@ func (s *Site) getVfcode(url string, outputPath string) (vfcode string, err erro
 	vfcode, err = stdin.ReadString('\n')
 	if err == nil || err == io.EOF {
 		vfcode = vfcode[:len(vfcode)-1]
-		glog.V(2).Infof("vfcode input -> '%v'\n", vfcode)
+		s.Debugf(log.DEBUG_SESSION, "vfcode input -> '%v'\n", vfcode)
 	}
 	return
 }

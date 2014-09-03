@@ -6,7 +6,8 @@ import (
 	"io/ioutil"
 
 	toml "github.com/BurntSushi/toml"
-	glog "github.com/golang/glog"
+
+	log "github.com/v-gu/guahao/log"
 )
 
 var (
@@ -14,7 +15,7 @@ var (
 	tomlString string
 )
 
-var All Config = Config{StorePath: "run"}
+var All Config = Config{StorePath: "run", NamedLogger: log.NamedLogger{"config"}}
 
 type Config struct {
 	StorePath string
@@ -22,6 +23,8 @@ type Config struct {
 
 	metaData     toml.MetaData
 	sectionPrims map[string]toml.Primitive
+
+	log.NamedLogger
 }
 
 func init() {
@@ -42,9 +45,7 @@ func getGlobalConfig() {
 	if err != nil {
 		panic(err)
 	}
-	if glog.V(LOG_CONFIG) {
-		glog.Infof("globalconf -> %#v\n", All)
-	}
+	All.Debugf(log.DEBUG_CONFIG, "globalconf -> %#v\n", All)
 
 	// read section config entries
 	All.metaData, err = toml.Decode(tomlString, &All.sectionPrims)
@@ -63,8 +64,6 @@ func (c *Config) UnmarshalConfig(section string, config interface{}) (err error)
 		}
 	}
 	err = c.metaData.PrimitiveDecode(c.sectionPrims[section], config)
-	if glog.V(LOG_CONFIG) && err == nil {
-		glog.Infof("config: decoded: %v\n", config)
-	}
+	c.Debugf(log.DEBUG_CONFIG, "config: decoded: %v\n", config)
 	return
 }
