@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"os"
 
 	toml "github.com/BurntSushi/toml"
+	glog "github.com/golang/glog"
 
 	log "github.com/v-gu/guahao/log"
 )
@@ -28,6 +30,12 @@ type Config struct {
 }
 
 func init() {
+	defer func() {
+		if err := recover(); err != nil {
+			glog.Errorln(err)
+			os.Exit(1)
+		}
+	}()
 	parseFlags()
 	getGlobalConfig()
 }
